@@ -235,6 +235,40 @@ export async function fetchMessages(conversationId: string = 'conv-default'): Pr
   return res.json();
 }
 
+export interface StoredModelConfig {
+  activeProvider: 'gemini' | 'openai' | 'anthropic';
+  geminiKey: string;
+  openaiKey: string;
+  anthropicKey: string;
+  geminiModel: string;
+  openaiModel: string;
+  anthropicModel: string;
+  updatedAt?: string;
+}
+
+export function getStoredModelConfig(): StoredModelConfig | null {
+  try {
+    const raw = localStorage.getItem('gen_ai_model_config');
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn('Could not read stored model config:', err);
+  }
+  return null;
+}
+
+export function saveStoredModelConfig(config: StoredModelConfig): void {
+  try {
+    localStorage.setItem('gen_ai_model_config', JSON.stringify({
+      ...config,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.warn('Could not save stored model config:', err);
+  }
+}
+
 export async function sendAgentMessage(
   prompt: string,
   projectId: string = 'proj-1',
@@ -242,10 +276,17 @@ export async function sendAgentMessage(
   attachedFiles: string[] = [],
   model?: string
 ): Promise<{ message: ChatMessage; agentRun: AgentRun }> {
+  const storedConfig = getStoredModelConfig();
+  const customKeys = storedConfig ? {
+    geminiKey: storedConfig.geminiKey || undefined,
+    openaiKey: storedConfig.openaiKey || undefined,
+    anthropicKey: storedConfig.anthropicKey || undefined,
+  } : undefined;
+
   const res = await fetch(`${API_BASE}/agent/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, projectId, conversationId, attachedFiles, model }),
+    body: JSON.stringify({ prompt, projectId, conversationId, attachedFiles, model, customKeys }),
   });
   if (!res.ok) throw new Error('Agent execution failed');
   return res.json();

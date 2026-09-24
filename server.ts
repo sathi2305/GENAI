@@ -262,7 +262,7 @@ async function startServer() {
   // AI Work Agent Execution (REST Synchronous)
   app.post('/api/v1/agent/chat', async (req: Request, res: Response) => {
     try {
-      const { prompt, projectId, conversationId, attachedFiles, model } = req.body;
+      const { prompt, projectId, conversationId, attachedFiles, model, customKeys } = req.body;
       if (!prompt) {
         res.status(400).json({ error: 'Prompt is required' });
         return;
@@ -282,7 +282,9 @@ async function startServer() {
         projectId || 'proj-1',
         conversationId || 'conv-default',
         attachedFiles || [],
-        model || 'gemini-3.8-flash'
+        model || 'gemini-3.8-flash',
+        undefined,
+        customKeys
       );
 
       // Record assistant message with run payload
@@ -303,7 +305,7 @@ async function startServer() {
 
   // AI Work Agent Execution (SSE Streaming)
   app.post('/api/v1/agent/stream', async (req: Request, res: Response) => {
-    const { prompt, projectId, conversationId, attachedFiles, model } = req.body;
+    const { prompt, projectId, conversationId, attachedFiles, model, customKeys } = req.body;
     if (!prompt) {
       res.status(400).json({ error: 'Prompt is required' });
       return;
@@ -331,7 +333,8 @@ async function startServer() {
         model || 'gemini-3.8-flash',
         (event: StreamEvent) => {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
-        }
+        },
+        customKeys
       );
 
       // Record assistant message

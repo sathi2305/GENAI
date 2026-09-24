@@ -21,6 +21,7 @@ import {
   Brain,
 } from 'lucide-react';
 import { ChatMessage, AgentRun, AgentStep, Approval } from '../types/index.ts';
+import { getStoredModelConfig } from '../lib/api.ts';
 
 interface AgentChatViewProps {
   messages: ChatMessage[];
@@ -55,8 +56,36 @@ export const AgentChatView: React.FC<AgentChatViewProps> = ({
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
   const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash');
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const modelOptions = [
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'Google DeepMind', badge: 'Default', tag: 'Gemini' },
+    { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', provider: 'Google DeepMind', badge: 'Reasoning', tag: 'Gemini' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google DeepMind', badge: 'Fast', tag: 'Gemini' },
+    { id: 'chatgpt-4o', name: 'ChatGPT (GPT-4o)', provider: 'OpenAI', badge: 'Omni', tag: 'ChatGPT' },
+    { id: 'chatgpt-4o-mini', name: 'ChatGPT (GPT-4o Mini)', provider: 'OpenAI', badge: 'Speed', tag: 'ChatGPT' },
+    { id: 'o1-preview', name: 'OpenAI o1', provider: 'OpenAI', badge: 'Deep Thought', tag: 'ChatGPT' },
+    { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'Anthropic', badge: 'Top Code', tag: 'Claude' },
+    { id: 'claude-3-opus', name: 'Claude 3 Opus', provider: 'Anthropic', badge: 'Deep Research', tag: 'Claude' },
+    { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', provider: 'Anthropic', badge: 'Ultra Fast', tag: 'Claude' },
+  ];
+
+  const currentModelObj = modelOptions.find((m) => m.id === selectedModel) || modelOptions[0];
+
+  useEffect(() => {
+    const config = getStoredModelConfig();
+    if (config) {
+      if (config.activeProvider === 'openai' && config.openaiModel) {
+        setSelectedModel(config.openaiModel);
+      } else if (config.activeProvider === 'anthropic' && config.anthropicModel) {
+        setSelectedModel(config.anthropicModel);
+      } else if (config.geminiModel) {
+        setSelectedModel(config.geminiModel);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (presetPrompt) {
@@ -101,6 +130,7 @@ export const AgentChatView: React.FC<AgentChatViewProps> = ({
   };
 
   const quickActionChips = [
+    'Hi Gen! How are you? What can you help me with?',
     'Gen: Here is my problem statement. Take care of the project.',
     'Gen: Deep architectural breakdown & state topology',
     'Research Eurovignette toll subsidies & EV elevation formulas',
@@ -125,48 +155,77 @@ export const AgentChatView: React.FC<AgentChatViewProps> = ({
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
             </div>
             <div className="text-[11px] text-zinc-400">
-              Autonomous AI Work Agent • Powered by Gemini • Google AI Studio
+              Autonomous AI Work Agent • ChatGPT, Gemini & Claude Models
             </div>
           </div>
         </div>
 
-        {/* Gemini Model Switcher Segmented Control */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 text-xs">
+        {/* Multi-Model Engine Selector */}
+        <div className="flex items-center gap-2 relative">
+          <div className="relative">
             <button
               type="button"
-              onClick={() => setSelectedModel('gemini-3.8-flash')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
-                selectedModel === 'gemini-3.8-flash'
-                  ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
-                  : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+              onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-2 transition-all ${
+                isDark
+                  ? 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:border-zinc-600'
+                  : 'bg-white border-zinc-200 text-zinc-800 hover:border-zinc-300 shadow-2xs'
               }`}
             >
-              Gemini 3.8 Flash
+              <div className="w-2 h-2 rounded-full bg-indigo-500" />
+              <span className="font-semibold">{currentModelObj.name}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 font-medium">
+                {currentModelObj.tag}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
             </button>
-            <button
-              type="button"
-              onClick={() => setSelectedModel('gemini-3.8-pro')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
-                selectedModel === 'gemini-3.8-pro'
-                  ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
-                  : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
-              }`}
-            >
-              Gemini 3.8 Pro
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedModel('gemini-3.8-thinking')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all flex items-center gap-1 ${
-                selectedModel === 'gemini-3.8-thinking'
-                  ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold'
-                  : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
-              }`}
-            >
-              <Brain className="w-3 h-3 text-indigo-500" />
-              <span>Thinking Mode</span>
-            </button>
+
+            {isModelDropdownOpen && (
+              <div
+                className={`absolute right-0 mt-1.5 w-72 rounded-xl border p-2 shadow-xl z-50 transition-all ${
+                  isDark ? 'bg-zinc-900 border-zinc-800 text-zinc-200' : 'bg-white border-zinc-200 text-zinc-800'
+                }`}
+              >
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Select AI Reasoning Model
+                </div>
+
+                {['Gemini', 'ChatGPT', 'Claude'].map((providerGroup) => (
+                  <div key={providerGroup} className="mt-1.5">
+                    <div className="px-2 py-0.5 text-[10px] font-semibold text-zinc-500 flex items-center justify-between">
+                      <span>{providerGroup === 'Gemini' ? 'Google Gemini' : providerGroup === 'ChatGPT' ? 'OpenAI ChatGPT' : 'Anthropic Claude'}</span>
+                    </div>
+                    <div className="space-y-0.5 mt-0.5">
+                      {modelOptions
+                        .filter((m) => m.tag === providerGroup)
+                        .map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedModel(opt.id);
+                              setIsModelDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${
+                              selectedModel === opt.id
+                                ? 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-semibold'
+                                : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300'
+                            }`}
+                          >
+                            <div>
+                              <div className="font-medium">{opt.name}</div>
+                              <div className="text-[10px] text-zinc-400">{opt.provider}</div>
+                            </div>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500">
+                              {opt.badge}
+                            </span>
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <span className="hidden sm:inline-flex px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-medium">

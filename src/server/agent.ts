@@ -26,6 +26,78 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
+// Multi-provider API callers for OpenAI ChatGPT and Anthropic Claude
+async function callOpenAI(model: string, systemPrompt: string, userPrompt: string, customApiKey?: string): Promise<string | null> {
+  const apiKey = customApiKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const openaiModel = model === 'chatgpt-4o-mini' || model === 'gpt-4o-mini'
+      ? 'gpt-4o-mini'
+      : model.includes('o1')
+      ? 'o1-mini'
+      : 'gpt-4o';
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: openaiModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+      }),
+    });
+    if (!res.ok) {
+      console.warn('OpenAI API returned status:', res.status);
+      return null;
+    }
+    const data = (await res.json()) as any;
+    return data.choices?.[0]?.message?.content || null;
+  } catch (err) {
+    console.warn('Error calling OpenAI API:', err);
+    return null;
+  }
+}
+
+async function callAnthropic(model: string, systemPrompt: string, userPrompt: string, customApiKey?: string): Promise<string | null> {
+  const apiKey = customApiKey || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const claudeModel = model.includes('opus')
+      ? 'claude-3-opus-20240229'
+      : model.includes('haiku')
+      ? 'claude-3-5-haiku-20241022'
+      : 'claude-3-5-sonnet-20241022';
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: claudeModel,
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+    if (!res.ok) {
+      console.warn('Anthropic API returned status:', res.status);
+      return null;
+    }
+    const data = (await res.json()) as any;
+    return data.content?.[0]?.text || null;
+  } catch (err) {
+    console.warn('Error calling Anthropic API:', err);
+    return null;
+  }
+}
+
 const CREWAI_ROLE = 'Gen — Google DeepMind Unified Autonomous AI Work Agent';
 const CREWAI_GOAL = `You are Gen: an exceptionally capable, insightful, rigorous, and versatile autonomous AI engineering partner powered by Google DeepMind's Gemini. Manage the complete software and hackathon lifecycle from research, architectural design, and full-stack coding to automated AST verification, testing, documentation, slide decks, deployment pipelines, and persistent project memory.`;
 const CREWAI_BACKSTORY = `You are Gen, Google DeepMind's unified autonomous AI Work Agent. You combine deep technical reasoning, transparent thinking steps, real-time tool orchestration, and safety-first human-in-the-loop approvals. You analyze intent with precision, retrieve relevant architectural context from memory, formulate structured plans, run automated tests, and communicate with Gen's hallmark clarity, depth, and craftsmanship. Never claim an operation succeeded unless verified.`;
@@ -42,13 +114,20 @@ export interface StreamEvent {
   error?: string;
 }
 
+export interface CustomApiKeys {
+  geminiKey?: string;
+  openaiKey?: string;
+  anthropicKey?: string;
+}
+
 export async function executeAgent(
   userPrompt: string,
   projectId: string = 'proj-1',
   conversationId: string = 'conv-default',
   attachedFileNames: string[] = [],
   model: string = 'gemini-3.8-flash',
-  onEvent?: (event: StreamEvent) => void
+  onEvent?: (event: StreamEvent) => void,
+  customKeys?: CustomApiKeys
 ): Promise<AgentRun> {
   const startTime = Date.now();
   const runId = `run-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -75,13 +154,25 @@ export async function executeAgent(
   };
   onEvent?.({ type: 'step', step: intentStep });
 
-  const intentLower = userPrompt.toLowerCase();
+  const intentLower = userPrompt.toLowerCase().trim();
+  const isGreeting =
+    /^(hi|hello|hey|howdy|greetings|good morning|good afternoon|good evening|how are you|sup|what's up|hi gen|hello gen|hey gen)[\s!.,?]*$/i.test(
+      intentLower
+    ) ||
+    intentLower === 'hi' ||
+    intentLower.startsWith('hi ') ||
+    intentLower === 'hello' ||
+    intentLower.startsWith('hello ') ||
+    intentLower.includes('how are you');
+
   let intentCategory = 'General Engineering Assistance';
   let requiresApproval = false;
   let approvalAction = '';
   let approvalTarget = '';
 
-  if (intentLower.includes('problem statement') || intentLower.includes('take care') || intentLower.includes('hackathon')) {
+  if (isGreeting) {
+    intentCategory = 'Conversational Greeting & Assistance';
+  } else if (intentLower.includes('problem statement') || intentLower.includes('take care') || intentLower.includes('hackathon')) {
     intentCategory = 'Autonomous Project Lifecycle & Hackathon Planning';
   } else if (intentLower.includes('research') || intentLower.includes('search') || intentLower.includes('find papers') || intentLower.includes('api')) {
     intentCategory = 'Autonomous Web & Regulatory Research';
@@ -258,13 +349,30 @@ export async function executeAgent(
     onEvent?.({ type: 'approval_required', approval: pendingApproval });
   }
 
-  // Step 6: Generate Agent Response with Gemini 3.8 Flash (or high-fidelity autonomous fallback)
+  // Step 6: Generate Agent Response (Gemini, ChatGPT, Claude, or Autonomous Synthesizer)
   let responseText = '';
-  const ai = getGeminiClient();
 
-  if (ai) {
-    try {
-      const systemInstruction = `${CREWAI_BACKSTORY}
+  const modelLabel = model.startsWith('chatgpt-') || model.startsWith('gpt-')
+    ? 'ChatGPT (OpenAI GPT-4o)'
+    : model.startsWith('claude-')
+    ? 'Claude (Anthropic 3.5 Sonnet)'
+    : 'Gemini (Google DeepMind)';
+
+  if (isGreeting) {
+    responseText = `Hello! I am fine, thank you. What can I help you with today?
+
+I am **Gen**, your autonomous AI work agent running with **${modelLabel}**.
+
+Here is what I can do for you:
+- 🚀 **Autonomous Project Management**: Breakdown problem statements, create Kanban tasks, and coordinate sprints
+- 💻 **Full-Stack Engineering & AST Testing**: Generate clean code, run sandbox unit tests, and resolve issues
+- 🔍 **Web & Regulatory Research**: Retrieve scientific benchmarks and authoritative technical documentation
+- 📊 **Documents & Slide Presentations**: Write Markdown specifications and create pitch decks in PPT Studio
+- ⏱️ **Scheduled Maintenance**: Set up recurring automated progress summaries, notification cleanup, and memory consolidation
+
+What would you like to work on today? Feel free to share your requirements or ask any question!`;
+  } else {
+    const systemInstruction = `${CREWAI_BACKSTORY}
 
 You are Gen, the autonomous AI Work Agent orchestrating all tasks.
 When responding to complex or autonomous requests, you MUST format your response strictly using these Markdown sections:
@@ -291,7 +399,7 @@ When responding to complex or autonomous requests, you MUST format your response
 
 Keep normal simple questions conversational, but for project management, problem statements, coding, and hackathons, adhere strictly to this structured format.`;
 
-      const promptContext = `Project Context:
+    const promptContext = `Project Context:
 Project: ${db.getProjectById(projectId)?.name || 'Default Project'}
 Tech Stack: ${db.getProjectById(projectId)?.techStack.join(', ')}
 Requirements: ${db.getProjectById(projectId)?.requirements.join('; ')}
@@ -301,27 +409,45 @@ Existing Documents: ${existingDocs.map((d) => d.title).join(', ')}
 User Prompt: "${userPrompt}"
 Attached Files: ${attachedFileNames.join(', ') || 'None'}`;
 
-      const activeModel = model === 'gemini-3.8-pro' ? 'gemini-3.8-pro' : 'gemini-3.8-flash';
-      const res = await ai.models.generateContent({
-        model: activeModel,
-        contents: promptContext,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
-
-      if (res.text) {
-        responseText = res.text;
-      }
-    } catch (err) {
-      console.warn('Gemini generateContent encountered error, falling back to autonomous synthesizer:', err);
+    // Try OpenAI API if requested
+    if (model.startsWith('chatgpt-') || model.startsWith('gpt-') || model.startsWith('o1-')) {
+      const openAiRes = await callOpenAI(model, systemInstruction, promptContext, customKeys?.openaiKey);
+      if (openAiRes) responseText = openAiRes;
     }
-  }
+    // Try Anthropic Claude API if requested
+    else if (model.startsWith('claude-')) {
+      const claudeRes = await callAnthropic(model, systemInstruction, promptContext, customKeys?.anthropicKey);
+      if (claudeRes) responseText = claudeRes;
+    }
+    // Default / Gemini API
+    else {
+      const ai = customKeys?.geminiKey
+        ? new GoogleGenAI({ apiKey: customKeys.geminiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } })
+        : getGeminiClient();
+      if (ai) {
+        try {
+          const activeModel = model === 'gemini-3.8-pro' ? 'gemini-3.8-pro' : 'gemini-3.8-flash';
+          const res = await ai.models.generateContent({
+            model: activeModel,
+            contents: promptContext,
+            config: {
+              systemInstruction,
+              temperature: 0.7,
+            },
+          });
+          if (res.text) {
+            responseText = res.text;
+          }
+        } catch (err) {
+          console.warn('Gemini generateContent error, falling back to autonomous synthesizer:', err);
+        }
+      }
+    }
 
-  // Fallback response synthesizer if Gemini API key not present or network unavailable
-  if (!responseText) {
-    responseText = generateAutonomousResponse(userPrompt, intentCategory, relevantMemories, requiresApproval, approvalAction);
+    // Fallback response synthesizer if provider API key not configured or offline
+    if (!responseText) {
+      responseText = generateAutonomousResponse(userPrompt, intentCategory, relevantMemories, requiresApproval, approvalAction, model);
+    }
   }
 
   // Stream content or deliver
@@ -374,9 +500,38 @@ function generateAutonomousResponse(
   intent: string,
   memories: { category: string; content: string }[],
   requiresApproval: boolean,
-  approvalAction: string
+  approvalAction: string,
+  model: string = 'gemini-3.8-flash'
 ): string {
-  const pLower = prompt.toLowerCase();
+  const pLower = prompt.toLowerCase().trim();
+
+  if (
+    pLower === 'hi' ||
+    pLower.startsWith('hi ') ||
+    pLower === 'hello' ||
+    pLower.startsWith('hello ') ||
+    pLower.includes('how are you') ||
+    intent.includes('Greeting')
+  ) {
+    const engineName = model.startsWith('chatgpt-') || model.startsWith('gpt-')
+      ? 'ChatGPT (OpenAI GPT-4o)'
+      : model.startsWith('claude-')
+      ? 'Claude (Anthropic 3.5 Sonnet)'
+      : 'Gemini (Google DeepMind)';
+
+    return `Hello! I am fine, thank you. What can I help you with today?
+
+I am **Gen**, your autonomous AI work agent running with **${engineName}**.
+
+Here are some of the ways I can help you right now:
+- 🚀 **Autonomous Project Management**: Share your problem statement or goal, and I'll generate milestones and organize tasks
+- 💻 **Full-Stack Engineering**: Write, debug, and verify production code with AST validation and automated unit testing
+- 🔍 **In-Depth Web & Paper Research**: Search regulatory databases, API docs, and academic papers
+- 📊 **Presentation & Document Generation**: Produce high-fidelity hackathon pitch decks in PPT Studio and markdown technical specs
+- ⏱️ **Scheduled Maintenance**: Manage recurring weekly summaries, notification cleaning, and memory consolidation
+
+How would you like to get started? Feel free to describe what you're working on!`;
+  }
 
   if (pLower.includes('problem statement') || pLower.includes('take care') || pLower.includes('hackathon')) {
     return `## Plan
